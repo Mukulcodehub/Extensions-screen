@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background: transparent;
+    }
+    
+    #captureFrame {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      border: none;
+      z-index: 999999;
+      background: rgba(0, 0, 0, 0.7);
+      display: none;
+    }
+    
+    .capture-container {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: white;
+      padding: 30px;
+      border-radius: 15px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+      text-align: center;
+      z-index: 1000000;
+      max-width: 400px;
+      width: 90%;
+    }
+    
+    .capture-container h2 {
+      margin: 0 0 15px 0;
+      color: #333;
+    }
+    
+    .instructions {
+      text-align: left;
+      background: #f5f5f5;
+      padding: 15px;
+      border-radius: 8px;
+      margin: 15px 0;
+      font-size: 14px;
+    }
+    
+    .btn {
+      padding: 12px 24px;
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: bold;
+      cursor: pointer;
+      margin: 5px;
+      width: 100%;
+    }
+    
+    .btn-primary {
+      background: #4CAF50;
+      color: white;
+    }
+    
+    .btn-secondary {
+      background: #f44336;
+      color: white;
+    }
+    
+    .btn:hover {
+      opacity: 0.9;
+    }
+  </style>
+</head>
+<body>
+  <div id="captureContainer" style="display: none;">
+    <div class="capture-container">
+      <h2>📺 Select Entire Screen</h2>
+      <div class="instructions">
+        <p><strong>IMPORTANT:</strong> Select <strong>"Entire Screen"</strong> only</p>
+        <p>❌ DO NOT select "Window" or "Application"</p>
+        <p>❌ DO NOT select "Browser Tab"</p>
+        <p>✅ Select "Entire Screen" to start timer</p>
+      </div>
+      <button id="startCapture" class="btn btn-primary">Select Screen</button>
+      <button id="cancelCapture" class="btn btn-secondary">Cancel</button>
+    </div>
+  </div>
+
+  <script>
+    console.log("Capture page loaded");
+    
+    document.getElementById('startCapture').addEventListener('click', async () => {
+      console.log("Start capture button clicked");
+      
+      try {
+        // Request screen capture
+        const stream = await navigator.mediaDevices.getDisplayMedia({
+          video: {
+            displaySurface: "monitor",
+            cursor: "always"
+          },
+          audio: false,
+          preferCurrentTab: false
+        });
+        
+        const track = stream.getVideoTracks()[0];
+        const displaySurface = track.getSettings().displaySurface;
+        
+        console.log("Screen selected:", displaySurface);
+        
+        if (displaySurface === "monitor") {
+          // Success - entire screen selected
+          track.stop();
+          stream.getTracks().forEach(t => t.stop());
+          
+          // Send success message to parent (popup)
+          window.parent.postMessage({
+            type: 'SCREEN_CAPTURE_SUCCESS',
+            displaySurface: displaySurface
+          }, '*');
+          
+          // Hide capture UI
+          document.getElementById('captureContainer').style.display = 'none';
+        } else {
+          // Wrong selection
+          track.stop();
+          stream.getTracks().forEach(t => t.stop());
+          
+          alert(`❌ Wrong selection!\n\nYou selected: ${displaySurface}\n\nPlease select "Entire Screen" only.`);
+        }
+        
+      } catch (error) {
+        console.error("Screen capture error:", error);
+        
+        // Send error message to parent
+        window.parent.postMessage({
+          type: 'SCREEN_CAPTURE_ERROR',
+          error: error.message
+        }, '*');
+        
+        // Hide capture UI
+        document.getElementById('captureContainer').style.display = 'none';
+      }
+    });
+    
+    document.getElementById('cancelCapture').addEventListener('click', () => {
+      console.log("Capture cancelled");
+      
+      // Send cancel message to parent
+      window.parent.postMessage({
+        type: 'SCREEN_CAPTURE_CANCELLED'
+      }, '*');
+      
+      // Hide capture UI
+      document.getElementById('captureContainer').style.display = 'none';
+    });
+    
+    // Listen for messages from parent (popup)
+    window.addEventListener('message', (event) => {
+      console.log("Capture page received message:", event.data);
+      
+      if (event.data.type === 'SHOW_CAPTURE_UI') {
+        // Show the capture UI
+        document.getElementById('captureContainer').style.display = 'block';
+      }
+      
+      if (event.data.type === 'HIDE_CAPTURE_UI') {
+        // Hide the capture UI
+        document.getElementById('captureContainer').style.display = 'none';
+      }
+    });
+    
+    // Notify parent that capture page is ready
+    window.parent.postMessage({
+      type: 'CAPTURE_PAGE_READY'
+    }, '*');
+  </script>
+</body>
+</html>

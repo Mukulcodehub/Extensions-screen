@@ -18,7 +18,7 @@
     "activeTab",
     "scripting",
     "tabs",
-    "offscreen"
+    "webNavigation"
   ],
   "host_permissions": [
     "https://*/*",
@@ -32,11 +32,14 @@
     {
       "matches": ["<all_urls>"],
       "js": ["content.js"],
-      "run_at": "document_start"
+      "run_at": "document_idle",
+      "all_frames": true
     }
   ],
-  "web_accessible_resources": [{
-    "resources": ["static/*"],
-    "matches": ["<all_urls>"]
-  }]
+  "web_accessible_resources": [
+    {
+      "resources": ["static/*", "capture.html"],
+      "matches": ["<all_urls>"]
+    }
+  ]
 }

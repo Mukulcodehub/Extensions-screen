@@ -1069,15 +1069,110 @@ export default function ScreenMonitor() {
       setIsInitializingCapture(false);
     }
   };
+const handleStart = async () => {
+  if (isAdmin) {
+    setScreenError("Screen capture is not available for admin users");
+    return;
+  }
 
-  const handleStart = () => {
-    if (isChromeExtension) {
-      handleExtensionStart();
-    } else {
-      handleRegularStart();
-    }
-  };
+  if (!fpLoaded) {
+    setScreenError("Device identification initializing... Please wait");
+    return;
+  }
 
+  setIsInitializingCapture(true);
+  setScreenError("⏳ Opening screen selector...");
+
+  try {
+    // Send message to content script to trigger screen capture
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0] && tabs[0].id) {
+        console.log("Sending screen capture request to tab:", tabs[0].id);
+        
+        chrome.tabs.sendMessage(tabs[0].id, {
+          action: 'triggerScreenCapture'
+        }, (response) => {
+          if (chrome.runtime.lastError) {
+            console.error("Error sending message:", chrome.runtime.lastError);
+            setScreenError("Please refresh the page and try again");
+            setIsInitializingCapture(false);
+            return;
+          }
+          
+          if (response && response.success) {
+            console.log("Screen capture triggered successfully");
+            // Don't set screen error, let the iframe handle it
+          } else if (response && response.error) {
+            setScreenError(response.error);
+            setIsInitializingCapture(false);
+          } else {
+            // No response, maybe content script isn't loaded
+            setScreenError("Please refresh the page and try again");
+            setIsInitializingCapture(false);
+          }
+        });
+      } else {
+        setScreenError("No active tab found");
+        setIsInitializingCapture(false);
+      }
+    });
+    
+    // Listen for screen capture results
+    const messageListener = (request, sender, sendResponse) => {
+      console.log("Popup received screen capture message:", request.action);
+      
+      if (request.action === 'screenCaptureSuccess') {
+        console.log("✅ Screen capture successful!");
+        setHasScreenAccess(true);
+        setScreenError("");
+        setIsStarted(true);
+        saveTimerToStorage(timerValue, true);
+        
+        // Show success notification
+        showNotification('✅ Entire screen access granted! Timer started.');
+        
+        // Remove listener
+        chrome.runtime.onMessage.removeListener(messageListener);
+        setIsInitializingCapture(false);
+      }
+      
+      if (request.action === 'screenCaptureError') {
+        console.error("❌ Screen capture error:", request.error);
+        setScreenError(request.error || "Screen capture failed");
+        
+        // Remove listener
+        chrome.runtime.onMessage.removeListener(messageListener);
+        setIsInitializingCapture(false);
+      }
+      
+      if (request.action === 'screenCaptureCancelled') {
+        console.log("Screen capture cancelled by user");
+        setScreenError("Screen selection cancelled");
+        
+        // Remove listener
+        chrome.runtime.onMessage.removeListener(messageListener);
+        setIsInitializingCapture(false);
+      }
+    };
+    
+    // Add the listener
+    chrome.runtime.onMessage.addListener(messageListener);
+    
+    // Set timeout to remove listener if no response
+    setTimeout(() => {
+      chrome.runtime.onMessage.removeListener(messageListener);
+      if (isInitializingCapture) {
+        setScreenError("Screen capture timed out. Please try again.");
+        setIsInitializingCapture(false);
+      }
+    }, 30000); // 30 second timeout
+    
+  } catch (err) {
+    console.error("Error starting screen capture:", err);
+    setScreenError(err.message || "Failed to start screen capture");
+    setIsInitializingCapture(false);
+  }
+};
   useEffect(() => {
     return () => {
       if (timerRef.current) {
