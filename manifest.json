@@ -9,7 +9,6 @@
     "128": "icons/icon128.png"
   },
   "action": {
-    "default_popup": "popup.html",
     "default_title": "Screen Monitor"
   },
   "permissions": [
@@ -38,7 +37,7 @@
   ],
   "web_accessible_resources": [
     {
-      "resources": ["static/*", "capture.html"],
+      "resources": ["static/*", "capture.html", "popup.html"],
       "matches": ["<all_urls>"]
     }
   ]
