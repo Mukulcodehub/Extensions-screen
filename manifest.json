@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Screen Monitor Pro",
+  "version": "2.0",
+  "description": "Auto capture screen every 15 min & upload with timer",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_title": "Screen Monitor"
+  },
+  "permissions": [
+    "desktopCapture",
+    "storage",
+    "activeTab",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://screenshot-chapter.onrender.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  }
+}
