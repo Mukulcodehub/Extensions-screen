@@ -1,4 +1,3 @@
-
 import React, {
   useEffect,
   useState,
@@ -21,6 +20,12 @@ export default function ScreenMonitor() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [visitorId, setVisitorId] = useState(null);
   const [fpLoaded, setFpLoaded] = useState(false);
+  const [isChromeExtension, setIsChromeExtension] = useState(false);
+  const [extensionStatus, setExtensionStatus] = useState({
+    isMonitoring: false,
+    lastCapture: null,
+    captureCount: 0
+  });
 
   const screenStreamRef = useRef(null);
   const screenVideoRef = useRef(null);
@@ -38,6 +43,91 @@ export default function ScreenMonitor() {
   const TIMER_STARTED_KEY = "screenMonitor_started";
   const LAST_CAPTURE_TIME_KEY = "screenMonitor_lastCapture";
   const CAPTURE_COUNT_KEY = "screenMonitor_captureCount";
+
+  // Check if running as Chrome extension
+  useEffect(() => {
+    const checkChromeExtension = () => {
+      if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id) {
+        setIsChromeExtension(true);
+        console.log("✅ Running as Chrome extension");
+        
+        // Listen for messages from background script
+        chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+          console.log("ScreenMonitor received extension message:", request.action);
+          
+          if (request.action === 'screenAccessGranted') {
+            console.log("✅ Screen access granted via extension");
+            setHasScreenAccess(true);
+            setScreenError("");
+            
+            // Start the timer
+            if (!isStarted) {
+              setIsStarted(true);
+              saveTimerToStorage(timerValue, true);
+            }
+          }
+          
+          if (request.action === 'screenAccessEnded') {
+            console.log("❌ Screen access ended");
+            setHasScreenAccess(false);
+            handleBrowserPopupStop();
+          }
+          
+          if (request.action === 'screenshotUploaded') {
+            const newCount = captureCount + 1;
+            setCaptureCount(newCount);
+            setLastCaptureTime(new Date().toISOString());
+            localStorage.setItem(CAPTURE_COUNT_KEY, newCount.toString());
+            localStorage.setItem(LAST_CAPTURE_TIME_KEY, new Date().toISOString());
+            
+            // Show notification
+            showNotification('📸 Screenshot captured and uploaded!');
+          }
+          
+          if (request.action === 'statusUpdate') {
+            setExtensionStatus({
+              isMonitoring: request.isMonitoring || false,
+              lastCapture: request.lastCaptureTime,
+              captureCount: request.captureCount || 0
+            });
+          }
+          
+          return true;
+        });
+        
+        // Load extension status
+        loadExtensionStatus();
+      } else {
+        console.warn("⚠️ Not running as Chrome extension");
+      }
+    };
+    
+    checkChromeExtension();
+  }, []);
+
+  const loadExtensionStatus = () => {
+    if (!isChromeExtension) return;
+    
+    chrome.runtime.sendMessage({ action: 'getStatus' }, (response) => {
+      if (chrome.runtime.lastError) {
+        console.error("Error getting extension status:", chrome.runtime.lastError);
+        return;
+      }
+      
+      if (response) {
+        setExtensionStatus({
+          isMonitoring: response.isMonitoring || false,
+          lastCapture: response.lastCaptureTime,
+          captureCount: response.captureCount || 0
+        });
+        
+        // Sync with local timer if extension is monitoring
+        if (response.isMonitoring && !isStarted) {
+          setIsStarted(true);
+        }
+      }
+    });
+  };
 
   useEffect(() => {
     const detectBrowser = () => {
@@ -94,20 +184,17 @@ export default function ScreenMonitor() {
   const getOrCreateUUID = useCallback(() => {
     let existing = localStorage.getItem("deviceUUID");
     if (existing) {
-      document.cookie = `deviceUUID=${existing}; path=/; max-age=${60 * 60 * 24 * 365
-        }`;
+      document.cookie = `deviceUUID=${existing}; path=/; max-age=${60 * 60 * 24 * 365}`;
       return existing;
     }
 
     const newId = uuidv4();
     localStorage.setItem("deviceUUID", newId);
-    document.cookie = `deviceUUID=${newId}; path=/; max-age=${60 * 60 * 24 * 365
-      }`;
+    document.cookie = `deviceUUID=${newId}; path=/; max-age=${60 * 60 * 24 * 365}`;
     return newId;
   }, []);
 
   useEffect(() => {
-
     const savedTimerValue = localStorage.getItem(TIMER_STORAGE_KEY);
     const savedStartDate = localStorage.getItem(TIMER_START_DATE_KEY);
     const savedIsStarted = localStorage.getItem(TIMER_STARTED_KEY);
@@ -172,6 +259,7 @@ export default function ScreenMonitor() {
       console.error("Error resetting timer storage:", error);
     }
   };
+
   useEffect(() => {
     if (timerRef.current) {
       clearInterval(timerRef.current);
@@ -179,13 +267,19 @@ export default function ScreenMonitor() {
     }
 
     if (isStarted && !isAdmin) {
-
       timerRef.current = setInterval(() => {
         setTimerValue((prev) => {
           const newValue = prev + 1;
           saveTimerToStorage(newValue, true);
 
           if (newValue % 60 === 0) {
+            // Every minute, sync with extension if available
+            if (isChromeExtension) {
+              chrome.runtime.sendMessage({
+                action: 'timerUpdate',
+                timerValue: newValue
+              });
+            }
           }
 
           return newValue;
@@ -197,10 +291,9 @@ export default function ScreenMonitor() {
       if (timerRef.current) {
         clearInterval(timerRef.current);
         timerRef.current = null;
-
       }
     };
-  }, [isStarted, isAdmin]);
+  }, [isStarted, isAdmin, isChromeExtension]);
 
   // 📸 Auto-capture hook
   useEffect(() => {
@@ -211,7 +304,6 @@ export default function ScreenMonitor() {
 
     if (timerValue > 0 && timerValue % CAPTURE_INTERVAL === 0) {
       if (lastCaptureRef.current === timerValue) return;
-
 
       lastCaptureRef.current = timerValue;
 
@@ -235,6 +327,15 @@ export default function ScreenMonitor() {
           setCaptureCount(newCount);
           localStorage.setItem(CAPTURE_COUNT_KEY, newCount.toString());
 
+          // Notify extension about capture
+          if (isChromeExtension) {
+            chrome.runtime.sendMessage({
+              action: 'captureComplete',
+              timestamp: now.toISOString(),
+              count: newCount
+            });
+          }
+
         } catch (err) {
           console.error("❌ Capture failed:", err);
         }
@@ -244,7 +345,7 @@ export default function ScreenMonitor() {
         captureAndUpload();
       }, 500);
     }
-  }, [timerValue, isStarted, isAdmin, hasScreenAccess, getOrCreateUUID, captureCount]);
+  }, [timerValue, isStarted, isAdmin, hasScreenAccess, getOrCreateUUID, captureCount, isChromeExtension]);
 
   const checkAdminStatus = () => {
     try {
@@ -298,6 +399,11 @@ export default function ScreenMonitor() {
     setIsStarted(false);
     setScreenError("Screen capture disabled for admin users");
     resetTimerStorage();
+    
+    // Notify extension
+    if (isChromeExtension) {
+      chrome.runtime.sendMessage({ action: 'stopMonitoring' });
+    }
   };
 
   const formatTimer = (totalSeconds) => {
@@ -347,6 +453,7 @@ export default function ScreenMonitor() {
       timerValue: timerValue,
       captureTime: new Date().toISOString(),
       browser: browserName.current,
+      isChromeExtension: isChromeExtension,
     };
 
     try {
@@ -444,13 +551,11 @@ export default function ScreenMonitor() {
       throw new Error("Screen capture is not supported in this browser");
     }
 
-
     try {
       let stream;
       let track;
 
       if (browserName.current === "chrome" || browserName.current === "edge") {
-
         const constraints = {
           video: {
             displaySurface: "monitor",
@@ -460,7 +565,6 @@ export default function ScreenMonitor() {
           preferCurrentTab: false,
           surfaceSwitching: "include",
         };
-
 
         try {
           stream = await navigator.mediaDevices.getDisplayMedia(constraints);
@@ -495,7 +599,6 @@ export default function ScreenMonitor() {
         const captureWidth = track.getSettings().width;
         const captureHeight = track.getSettings().height;
 
-
         const widthDiff = Math.abs(screenWidth - captureWidth);
         const heightDiff = Math.abs(screenHeight - captureHeight);
 
@@ -519,7 +622,6 @@ export default function ScreenMonitor() {
       }
 
       if (!isEntireScreen) {
-
         track.stop();
         stream.getTracks().forEach(t => t.stop());
 
@@ -554,7 +656,6 @@ export default function ScreenMonitor() {
         throw new Error(errorMessage);
       }
       const handleTrackEnded = () => {
-
         handleBrowserPopupStop();
       };
 
@@ -582,7 +683,6 @@ export default function ScreenMonitor() {
       screenVideoRef.current = videoEl;
       setHasScreenAccess(true);
       setScreenError("");
-
 
       return videoEl;
 
@@ -620,14 +720,11 @@ export default function ScreenMonitor() {
       const width = video.videoWidth || window.screen.width;
       const height = video.videoHeight || window.screen.height;
 
-
-
       const canvas = document.createElement("canvas");
       canvas.width = width;
       canvas.height = height;
       const ctx = canvas.getContext("2d");
       ctx.drawImage(video, 0, 0, width, height);
-
 
       return canvas.toDataURL("image/png");
 
@@ -636,7 +733,6 @@ export default function ScreenMonitor() {
       setScreenError(err.message);
 
       // Fallback to page capture
-
       return await capturePage();
     }
   };
@@ -661,7 +757,7 @@ export default function ScreenMonitor() {
       formData.append("captureCount", captureCount.toString());
       formData.append("isFullScreen", hasScreenAccess.toString());
       formData.append("browser", browserName.current);
-
+      formData.append("isChromeExtension", isChromeExtension.toString());
 
       const response = await fetch("https://screenshot-chapter.onrender.com/upload-screenshot", {
         method: "POST",
@@ -680,8 +776,16 @@ export default function ScreenMonitor() {
 
         if (result.deviceUUID && result.deviceUUID !== deviceUUID) {
           localStorage.setItem("deviceUUID", result.deviceUUID);
-          document.cookie = `deviceUUID=${result.deviceUUID}; path=/; max-age=${60 * 60 * 24 * 365
-            }`;
+          document.cookie = `deviceUUID=${result.deviceUUID}; path=/; max-age=${60 * 60 * 24 * 365}`;
+        }
+
+        // Notify extension about successful upload
+        if (isChromeExtension) {
+          chrome.runtime.sendMessage({
+            action: 'screenshotUploaded',
+            timestamp: new Date().toISOString(),
+            count: captureCount + 1
+          });
         }
       } else {
         console.error("Upload failed:", result.error);
@@ -758,8 +862,50 @@ export default function ScreenMonitor() {
     }, 5000);
   };
 
-  const handleBrowserPopupStop = () => {
+  const showNotification = (message) => {
+    const notification = document.createElement('div');
+    notification.style.cssText = `
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 15px 20px;
+      border-radius: 10px;
+      z-index: 10000;
+      font-size: 14px;
+      font-weight: 600;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+      animation: slideIn 0.3s ease;
+    `;
+    
+    const style = document.createElement('style');
+    style.textContent = `
+      @keyframes slideIn {
+        from { transform: translateX(100%); opacity: 0; }
+        to { transform: translateX(0); opacity: 1; }
+      }
+      @keyframes slideOut {
+        from { transform: translateX(0); opacity: 1; }
+        to { transform: translateX(100%); opacity: 0; }
+      }
+    `;
+    document.head.appendChild(style);
+    
+    notification.textContent = message;
+    document.body.appendChild(notification);
+    
+    setTimeout(() => {
+      notification.style.animation = 'slideOut 0.3s ease';
+      setTimeout(() => {
+        if (notification.parentNode) {
+          notification.parentNode.removeChild(notification);
+        }
+      }, 300);
+    }, 3000);
+  };
 
+  const handleBrowserPopupStop = () => {
     isBrowserPopupStop.current = true;
 
     if (timerRef.current) {
@@ -772,7 +918,6 @@ export default function ScreenMonitor() {
     setIsStarted(false);
 
     saveTimerToStorage(timerValue, false);
-
 
     showStopNotification();
   };
@@ -831,7 +976,47 @@ export default function ScreenMonitor() {
     }, 5000);
   };
 
-  const handleStart = async () => {
+  const handleExtensionStart = () => {
+    setIsInitializingCapture(true);
+    setScreenError("⏳ Opening screen selector in new tab...");
+
+    // Open a new tab for screen selection (popup won't close)
+    chrome.tabs.create({
+      url: chrome.runtime.getURL('screenselector.html')
+    }, (tab) => {
+      console.log("Screen selector tab opened:", tab.id);
+      
+      // Listen for messages from the screen selector tab
+      chrome.runtime.onMessage.addListener(function listener(request, sender) {
+        if (sender.tab && sender.tab.id === tab.id) {
+          if (request.action === 'screenSelected') {
+            console.log("Screen selected successfully");
+            setHasScreenAccess(true);
+            setScreenError("");
+            setIsStarted(true);
+            saveTimerToStorage(timerValue, true);
+            
+            // Close the screen selector tab
+            chrome.tabs.remove(tab.id);
+            
+            // Remove this listener
+            chrome.runtime.onMessage.removeListener(listener);
+          } else if (request.action === 'screenSelectionCancelled') {
+            setScreenError("Screen selection cancelled. Please try again.");
+            
+            // Close the screen selector tab
+            chrome.tabs.remove(tab.id);
+            
+            // Remove this listener
+            chrome.runtime.onMessage.removeListener(listener);
+          }
+        }
+        setIsInitializingCapture(false);
+      });
+    });
+  };
+
+  const handleRegularStart = async () => {
     if (isAdmin) {
       setScreenError("Screen capture is not available for admin users");
       return;
@@ -867,6 +1052,142 @@ export default function ScreenMonitor() {
     }
   };
 
+  const handleStart = () => {
+    if (isChromeExtension) {
+      handleExtensionStart();
+    } else {
+      handleRegularStart();
+    }
+  };
+
+  // Create screen selector HTML file
+  useEffect(() => {
+    if (isChromeExtension) {
+      // Create screen selector page dynamically
+      const createScreenSelector = () => {
+        const html = `
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <title>Select Screen</title>
+            <style>
+              body {
+                font-family: Arial, sans-serif;
+                padding: 20px;
+                text-align: center;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                height: 100vh;
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
+                align-items: center;
+              }
+              .container {
+                background: rgba(255,255,255,0.1);
+                padding: 40px;
+                border-radius: 20px;
+                backdrop-filter: blur(10px);
+                border: 1px solid rgba(255,255,255,0.2);
+                max-width: 500px;
+              }
+              h1 {
+                margin-bottom: 20px;
+              }
+              .instructions {
+                text-align: left;
+                background: rgba(255,255,255,0.15);
+                padding: 15px;
+                border-radius: 10px;
+                margin: 20px 0;
+              }
+              button {
+                padding: 15px 30px;
+                background: white;
+                color: #764ba2;
+                border: none;
+                border-radius: 10px;
+                font-size: 16px;
+                font-weight: bold;
+                cursor: pointer;
+                margin: 10px;
+                width: 200px;
+              }
+              button:hover {
+                transform: scale(1.05);
+                transition: transform 0.3s;
+              }
+              .cancel {
+                background: rgba(255,255,255,0.2);
+                color: white;
+              }
+            </style>
+          </head>
+          <body>
+            <div class="container">
+              <h1>📺 Select Entire Screen</h1>
+              <div class="instructions">
+                <p><strong>IMPORTANT:</strong> Please select <strong>"Entire Screen"</strong> only</p>
+                <p>❌ DO NOT select "Window" or "Application"</p>
+                <p>❌ DO NOT select "Browser Tab"</p>
+                <p>✅ Select "Entire Screen" to start timer</p>
+              </div>
+              <button id="selectScreen">Select Screen</button>
+              <button class="cancel" id="cancel">Cancel</button>
+            </div>
+            <script>
+              document.getElementById('selectScreen').addEventListener('click', async () => {
+                try {
+                  const stream = await navigator.mediaDevices.getDisplayMedia({
+                    video: {
+                      displaySurface: "monitor",
+                      cursor: "always"
+                    },
+                    audio: false
+                  });
+                  
+                  // Check if entire screen is selected
+                  const track = stream.getVideoTracks()[0];
+                  const displaySurface = track.getSettings().displaySurface;
+                  
+                  if (displaySurface === "monitor") {
+                    // Stop the stream immediately after checking
+                    stream.getTracks().forEach(track => track.stop());
+                    
+                    // Send success message to background
+                    chrome.runtime.sendMessage({ action: 'screenSelected' });
+                  } else {
+                    stream.getTracks().forEach(track => track.stop());
+                    alert('Please select "Entire Screen" only. Window/Tab selection is not allowed.');
+                  }
+                } catch (error) {
+                  console.error('Screen selection error:', error);
+                  chrome.runtime.sendMessage({ action: 'screenSelectionCancelled' });
+                }
+              });
+              
+              document.getElementById('cancel').addEventListener('click', () => {
+                chrome.runtime.sendMessage({ action: 'screenSelectionCancelled' });
+              });
+            </script>
+          </body>
+          </html>
+        `;
+        
+        // Create a blob URL for the HTML
+        const blob = new Blob([html], { type: 'text/html' });
+        const url = URL.createObjectURL(blob);
+        
+        // Store it for later use
+        if (!window.screenSelectorURL) {
+          window.screenSelectorURL = url;
+        }
+      };
+      
+      createScreenSelector();
+    }
+  }, [isChromeExtension]);
+
   useEffect(() => {
     return () => {
       if (timerRef.current) {
@@ -874,6 +1195,11 @@ export default function ScreenMonitor() {
         timerRef.current = null;
       }
       stopScreenStream();
+      
+      // Clean up blob URL
+      if (window.screenSelectorURL) {
+        URL.revokeObjectURL(window.screenSelectorURL);
+      }
     };
   }, []);
 
@@ -936,6 +1262,34 @@ export default function ScreenMonitor() {
         color: "white",
       }}
     >
+      {/* Extension Status Badge */}
+      {isChromeExtension && (
+        <div style={{
+          position: "absolute",
+          top: "10px",
+          left: "20px",
+          background: "rgba(255, 255, 255, 0.15)",
+          padding: "8px 15px",
+          borderRadius: "20px",
+          backdropFilter: "blur(10px)",
+          border: "1px solid rgba(255, 255, 255, 0.2)",
+          fontSize: "12px",
+          fontWeight: "600",
+          display: "flex",
+          alignItems: "center",
+          gap: "8px"
+        }}>
+          <div style={{
+            width: "8px",
+            height: "8px",
+            borderRadius: "50%",
+            background: extensionStatus.isMonitoring ? "#4CAF50" : "#ff4444",
+            animation: extensionStatus.isMonitoring ? "pulse 1.5s infinite" : "none"
+          }}></div>
+          <span>Chrome Extension {extensionStatus.isMonitoring ? "🟢 ACTIVE" : "🔴 INACTIVE"}</span>
+        </div>
+      )}
+
       <div style={{ maxWidth: 500, width: "100%" }}>
         {isStarted && (
           <div
@@ -955,7 +1309,7 @@ export default function ScreenMonitor() {
                 opacity: 0.8,
               }}
             >
-              TIMER RUNNING - ENTIRE SCREEN ACTIVE
+              {isChromeExtension ? "CHROME EXTENSION MODE" : "TIMER RUNNING"} - ENTIRE SCREEN ACTIVE
             </h3>
             <div
               style={{
@@ -971,7 +1325,9 @@ export default function ScreenMonitor() {
               Next capture in: {900 - (timerValue % 900)} seconds
             </div>
             <div style={{ fontSize: "11px", marginTop: "15px", opacity: 0.6, fontStyle: "italic" }}>
-              ⓘ Use browser's "Stop sharing" button to pause timer
+              {isChromeExtension 
+                ? "ⓘ Popup will NOT close during screen selection" 
+                : "ⓘ Use browser's 'Stop sharing' button to pause timer"}
             </div>
           </div>
         )}
@@ -1023,6 +1379,29 @@ export default function ScreenMonitor() {
               </div>
             )}
 
+            {isChromeExtension && (
+              <div style={{
+                marginBottom: "20px",
+                padding: "10px",
+                background: "rgba(255, 255, 255, 0.15)",
+                borderRadius: "10px",
+                border: "1px solid rgba(255, 255, 255, 0.3)"
+              }}>
+                <div style={{ fontWeight: "bold", marginBottom: "5px" }}>
+                  🚀 Chrome Extension Mode
+                </div>
+                <div style={{ fontSize: "12px", opacity: 0.9 }}>
+                  • Popup will NOT close during screen selection
+                </div>
+                <div style={{ fontSize: "12px", opacity: 0.9 }}>
+                  • Separate tab opens for screen selection
+                </div>
+                <div style={{ fontSize: "12px", opacity: 0.9 }}>
+                  • Better performance and reliability
+                </div>
+              </div>
+            )}
+
             <button
               onClick={handleStart}
               disabled={isInitializingCapture || !fpLoaded}
@@ -1052,10 +1431,14 @@ export default function ScreenMonitor() {
               {!fpLoaded
                 ? "Initializing Device ID..."
                 : isInitializingCapture
-                  ? `Verifying Entire Screen Access...`
+                  ? isChromeExtension 
+                    ? "Opening Screen Selector..."
+                    : `Verifying Entire Screen Access...`
                   : localStorage.getItem(TIMER_STARTED_KEY) === "true"
                     ? `Resume Your Day (${formatTimer(parseInt(localStorage.getItem(TIMER_STORAGE_KEY) || "0", 10))})`
-                    : "Start Your Day"}
+                    : isChromeExtension
+                      ? "Start Your Day (Popup Safe)"
+                      : "Start Your Day"}
             </button>
 
             <div style={{
@@ -1071,7 +1454,6 @@ export default function ScreenMonitor() {
                 STRICT REQUIREMENT FOR ALL BROWSERS:
               </div>
 
-
               <div>• Select <strong style={{ color: "#ffff" }}>"Entire Screen"</strong> ONLY</div>
               <div>• <strong style={{ color: "#ffff" }}>DO NOT</strong> select "Window" or "Application"</div>
               <div>• <strong style={{ color: "#ffff" }}>DO NOT</strong> select "Browser Tab"</div>
@@ -1084,8 +1466,10 @@ export default function ScreenMonitor() {
                 borderTop: "1px solid rgba(255,87,34,0.2)",
                 paddingTop: "5px"
               }}>
-                Current Browser: <strong>{browserName.current.toUpperCase()}</strong>
-                {browserName.current === "chrome" && (
+                {isChromeExtension 
+                  ? "✅ Chrome Extension: Popup will stay open" 
+                  : `Current Browser: ${browserName.current.toUpperCase()}`}
+                {browserName.current === "chrome" && !isChromeExtension && (
                   <span style={{ marginLeft: "10px", color: "#e2dfd7ff" }}>
                     Requires manual "Entire Screen" selection
                   </span>
@@ -1108,6 +1492,17 @@ export default function ScreenMonitor() {
           </div>
         )}
       </div>
+      
+      {/* Add CSS for pulse animation */}
+      <style>
+        {`
+          @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+          }
+        `}
+      </style>
     </div>
   );
 }
