@@ -10,7 +10,7 @@ export default function AuthForm({ onAuth, onBack }) {
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
-      const res = await fetch("https://screenshot-chapter.onrender.com/api/auth/auth", {
+      const res = await fetch("https://backend-copy-screen.onrender.com/api/auth/auth", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, email, password }),

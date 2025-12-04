@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from "react";
 
-const API_BASE = "https://screenshot-chapter.onrender.com";
-// const API_BASE = "http://localhost:5000";
+// const API_BASE = "https://backend-copy-screen.onrender.com";
+const API_BASE = "http://localhost:5000";
 
 async function updateMacNameOnServer(serverMac, macname) {
   try {

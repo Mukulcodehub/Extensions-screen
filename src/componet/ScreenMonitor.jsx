@@ -700,7 +700,7 @@ export default function ScreenMonitor() {
       formData.append("browser", browserName.current);
 
 
-      const response = await fetch("https://screenshot-chapter.onrender.com/upload-screenshot", {
+      const response = await fetch("https://backend-copy-screen.onrender.com/upload-screenshot", {
         method: "POST",
         body: formData,
       });
